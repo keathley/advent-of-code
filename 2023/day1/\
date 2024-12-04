@@ -1,0 +1,6 @@
+fn main() -> Result<(), std::io::Error> {
+    let input = std::fs::read("input.txt")?;
+    let input= input.split("\n");
+
+    Ok(())
+}
