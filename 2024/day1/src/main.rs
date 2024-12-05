@@ -1,8 +1,3 @@
-use std::env;
-use std::fs;
-use std::io;
-use std::io::Read;
-
 use regex::Regex;
 
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -13,9 +8,9 @@ fn main() -> Result<(), Error> {
 
     // If we have a path we attempt to open the file or exit. Otherwise we assume
     // stdin
-    let mut rdr: Box<dyn io::Read> = match path {
-        Some(path) => Box::new(fs::File::open(path).expect("could not open file")),
-        None => Box::new(io::stdin()),
+    let mut rdr: Box<dyn std::io::Read> = match path {
+        Some(path) => Box::new(std::fs::File::open(path).expect("could not open file")),
+        None => Box::new(std::io::stdin()),
     };
 
     let mut buf = String::new();
