@@ -6,6 +6,121 @@ use nom::{
 
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 
+type Rule = (u32, u32);
+type Update = Vec<u32>;
+type RulesTable = HashMap<u32, Vec<u32>>;
+
+fn parse_rule(input: &str) -> IResult<&str, Rule> {
+    let (remaining, (a, _, b)) = terminated(
+            tuple((
+            map_res(digit1, str::parse),
+            tag("|"),
+            map_res(digit1, str::parse),
+        )),
+        newline
+        )(input)?;
+    Ok((remaining, (a, b)))
+}
+
+fn parse_update(input: &str) -> IResult<&str, Update> {
+    terminated(separated_list1(tag(","), map_res(digit1, str::parse)), newline)(input)
+}
+
+fn parse(input: &str) -> IResult<&str, (RulesTable, Vec<Update>)> {
+    let (remaining, (rules, _)) = many_till(parse_rule, newline)(input)?;
+    let (remaining, updates) = many1(parse_update)(remaining)?;
+
+    // Build rules table for easy lookup
+    let mut rule_table = HashMap::new();
+
+    for (a, b) in rules {
+        let rules = rule_table.entry(a).or_insert(vec![]);
+        rules.push(b);
+    }
+
+    Ok((remaining, (rule_table, updates)))
+}
+
+fn is_valid_update(update: &Update, rule_table: &RulesTable) -> bool {
+    // To check that our rules are being respected we're going to loop over
+    // each page number and then loop over any page numbers "forward" in the
+    // list. For each future page we check to see if there is a rule that states
+    // that the future number is required to come before our current page number.
+    // if there is then we know that there's an error in this update.
+    // Otherwise we stick our update in the list of good updates.
+    let is_invalid = update.iter()
+        .enumerate()
+        .any(|(i, page)| {
+            let forward = &update[i..];
+
+            // If we have any violations we can bail out and return false
+            forward.iter().any(|f| {
+                // If there are no rules than we can return false
+                // otherwise if we have a violation we return true immediately.
+                match rule_table.get(f) {
+                    Some(rules) => rules.contains(page),
+                    None => false
+                }
+            })
+        });
+
+    !is_invalid
+}
+
+// Returns true if page 1 must come before page 2
+fn page_must_be_before(page1: &u32, page2: &u32, table: &RulesTable) -> bool {
+    match table.get(page1) {
+        Some(rules) => rules.contains(page2),
+        None => false,
+    }
+}
+
+fn page_order(page1: &u32, page2: &u32, table: &RulesTable) -> Ordering {
+    // If page 1 must be before page 2 we return Less
+    // And if page 2 must be before page 1 we return Greater
+    // otherwise we return equal
+    if page_must_be_before(page1, page2, table) { return Ordering::Less }
+    if page_must_be_before(page2, page1, table) { return Ordering::Greater }
+
+    Ordering::Equal
+}
+
+fn part1(input: &str) -> Result<(), Error> {
+    let (_, (rules, updates)) = parse(input).unwrap();
+
+    let good_updates: Vec<Update> = updates.into_iter()
+        .filter(|update| is_valid_update(update, &rules))
+        .collect();
+
+    let result = good_updates.iter()
+        .map(|update| update[update.len()/2])
+        .sum::<u32>();
+
+    println!("Part 1: {}", result);
+    Ok(())
+}
+
+fn part2(input: &str) -> Result<(), Error> {
+    let (_, (rules, updates)) = parse(input).unwrap();
+
+    let bad_updates:Vec<Update> = updates.into_iter()
+        .filter(|update| !is_valid_update(update, &rules))
+        .collect::<Vec<Update>>();
+
+    let result = bad_updates.iter()
+        .map(|update| {
+            let mut sorted = update.clone();
+            sorted.sort_by(|a, b| page_order(a, b, &rules));
+            sorted
+        })
+        .map(|update| update[update.len()/2])
+        .sum::<u32>();
+
+    println!("Part 2: {}", result);
+
+    Ok(())
+}
+
 fn main() -> Result<(), Error> {
     // Get a path if there is one.
     let path = std::env::args_os().nth(1).map(std::path::PathBuf::from);
@@ -27,168 +142,3 @@ fn main() -> Result<(), Error> {
     Ok(())
 }
 
-type Rule = (u32, u32);
-type Update = Vec<u32>;
-
-fn parse_rule(input: &str) -> IResult<&str, Rule> {
-    let (remaining, (a, _, b)) = terminated(
-            tuple((
-            map_res(digit1, str::parse),
-            tag("|"),
-            map_res(digit1, str::parse),
-        )),
-        newline
-        )(input)?;
-    Ok((remaining, (a, b)))
-}
-
-fn parse_update(input: &str) -> IResult<&str, Update> {
-    terminated(separated_list1(tag(","), map_res(digit1, str::parse)), newline)(input)
-}
-
-fn parse(input: &str) -> IResult<&str, (Vec<Rule>, Vec<Update>)> {
-    let (remaining, (rules, _)) = many_till(parse_rule, newline)(input)?;
-    let (remaining, updates) = many1(parse_update)(remaining)?;
-    // Ok((rules, updates))
-    Ok((remaining, (rules, updates)))
-}
-
-fn part1(input: &str) -> Result<(), Error> {
-    let (_, (rules, updates)) = parse(input).unwrap();
-
-    // Build rules table for easy lookup
-    let mut rule_table = HashMap::new();
-
-    for (a, b) in rules {
-        let rules = rule_table.entry(a).or_insert(vec![]);
-        rules.push(b);
-    }
-
-    let mut good_updates = vec![];
-
-    for update in updates {
-        // To check that our rules are being respected we're going to loop over
-        // each page number and then loop over any page numbers "forward" in the
-        // list. For each future page we check to see if there is a rule that states
-        // that the future number is required to come before our current page number.
-        // if there is then we know that there's an error in this update.
-        // Otherwise we stick our update in the list of good updates.
-        let any_violations = update.iter()
-            .enumerate()
-            .any(|(i, page)| {
-                let forward = &update[i..];
-
-                // If we have any violations we can bail out and return false
-                forward.iter().any(|f| {
-                    // If there are no rules than we can return false
-                    // otherwise if we have a violation we return true immediately.
-                    match rule_table.get(f) {
-                        Some(rules) => rules.contains(page),
-                        None => false
-                    }
-                })
-            });
-
-        if !any_violations {
-            good_updates.push(update.clone())
-        }
-    }
-
-    let result = good_updates.iter()
-        .map(|update| update[update.len()/2])
-        .sum::<u32>();
-
-
-    println!("Part 1: {}", result);
-    Ok(())
-}
-
-type RulesTable = HashMap<u32, Vec<u32>>;
-
-fn is_valid_update(update: Update, rule_table: RulesTable) -> bool {
-    update.iter()
-        .enumerate()
-        .any(|(i, page)| {
-            let forward = &update[i..];
-
-            // If we have any violations we can bail out and return false
-            forward.iter().any(|f| {
-                // If there are no rules than we can return false
-                // otherwise if we have a violation we return true immediately.
-                match rule_table.get(f) {
-                    Some(rules) => rules.contains(page),
-                    None => false
-                }
-            })
-        })
-}
-
-// Returns true if page 1 must come before page 2
-fn page_must_be_before(page1: &u32, page2: &u32, table: &RulesTable) -> bool {
-    match table.get(page1) {
-        Some(rules) => rules.contains(page2),
-        None => false,
-    }
-}
-
-fn page_order(page1: &u32, page2: &u32, table: &RulesTable) -> Ordering {
-    // If page 1 must be before page 2 we return Less
-    // And if page 2 must be before page 1 we return Greater
-    // otherwise we return equal
-    if page_must_be_before(page1, page2, table) { return Ordering::Less }
-    if page_must_be_before(page2, page1, table) { return Ordering::Greater }
-
-    Ordering::Equal
-}
-
-fn part2(input: &str) -> Result<(), Error> {
-    let (_, (rules, updates)) = parse(input).unwrap();
-
-    // Build rules table for easy lookup
-    let mut rule_table = HashMap::new();
-
-    for (a, b) in rules {
-        let rules = rule_table.entry(a).or_insert(vec![]);
-        rules.push(b);
-    }
-
-    let rule_table = rule_table;
-
-    let bad_updates:Vec<Update> = updates.into_iter().filter(|update| {
-        // To check that our rules are being respected we're going to loop over
-        // each page number and then loop over any page numbers "forward" in the
-        // list. For each future page we check to see if there is a rule that states
-        // that the future number is required to come before our current page number.
-        // if there is then we know that there's an error in this update.
-        // Otherwise we stick our update in the list of good updates.
-        update.iter()
-            .enumerate()
-            .any(|(i, page)| {
-                let forward = &update[i..];
-
-                // If we have any violations we can bail out and return false
-                forward.iter().any(|f| {
-                    // If there are no rules than we can return false
-                    // otherwise if we have a violation we return true immediately.
-                    match rule_table.get(f) {
-                        Some(rules) => rules.contains(page),
-                        None => false
-                    }
-                })
-            })
-    })
-    .collect::<Vec<Update>>();
-
-    let result = bad_updates.iter()
-        .map(|update| {
-            let mut sorted = update.clone();
-            sorted.sort_by(|a, b| page_order(a, b, &rule_table));
-            sorted
-        })
-        .map(|update| update[update.len()/2])
-        .sum::<u32>();
-
-    println!("Part 2: {}", result);
-
-    Ok(())
-}
