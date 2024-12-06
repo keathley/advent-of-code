@@ -1,10 +1,11 @@
 use std::{
-    collections::HashSet, io::{stdout, Write}, thread, time::Duration
-};
+    collections::HashSet, time::Instant}
+;
+use rayon::prelude::*;
 
 use nom::{branch::alt, bytes::complete::tag, character::complete::newline, combinator::value, multi::many1, sequence::terminated, IResult};
 use thiserror::Error;
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 #[derive(Error, Debug)]
 pub enum PuzzleError {
@@ -18,7 +19,6 @@ enum Cell {
 }
 
 type PuzzleInput = Vec<Vec<Cell>>;
-type Coord = (u32, u32);
 type Steps = Vec<(Dir, usize, usize)>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]
@@ -52,7 +52,7 @@ struct Grid {
     cells: Vec<Vec<Cell>>
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Hash, Eq, Ord, PartialOrd)]
 enum Dir {
     North,
     East,
@@ -122,9 +122,6 @@ fn simulate(guard: Guard, grid: Grid) -> Steps {
     let mut guard = guard;
 
     loop {
-        // println!("looping: ({}, {})", guard.1, guard.2);
-        // thread::sleep(Duration::from_secs(5));
-
         steps.push((guard.0, guard.1, guard.2));
 
         match next_step(&mut guard, &grid) {
@@ -136,20 +133,23 @@ fn simulate(guard: Guard, grid: Grid) -> Steps {
     steps
 }
 
-fn find_loop(guard: Guard, grid: Grid, _log: bool) -> bool {
-    let mut guard = guard;
+fn find_loop(guard: Guard, grid: Grid) -> bool {
+    let mut slow_guard = guard;
     let mut is_loop = false;
     let mut history = HashSet::new();
 
     loop {
-        history.insert(guard);
-        if let Sim::Fin = next_step(&mut guard, &grid) {
+        history.insert(slow_guard);
+
+        // We can skip the check for the slow guard since our fast guard will find the exit much faster
+        // let _ = next_step(&mut slow_guard, &grid);
+        if let Sim::Fin = next_step(&mut slow_guard, &grid) {
             break
         }
 
         // If we've seen this exact same direction at this point we *have* to be
         // in a loop since the board never changes.
-        if history.contains(&guard) {
+        if history.contains(&slow_guard) {
             is_loop = true;
             break
         }
@@ -170,36 +170,55 @@ fn part1(guard: Guard, grid: Grid) -> Result<()> {
 }
 
 fn part2(guard: Guard, grid: Grid) -> Result<()> {
-    let mut result = 0;
+    // Build permutations of the grid by looking at the actual path of the guard and
+    // only adding obstacles in that path.
+    let mut steps = simulate(guard, grid.clone());
+    steps.sort();
+    steps.dedup();
+
+    let mut obstacles = HashSet::new();
+
+    for step in steps {
+        let result = match step {
+            (Dir::North, y, x) if y > 0 => Some((y-1, x)),
+            (Dir::East, y, x) if x < grid.width-1 => Some((y, x+1)),
+            (Dir::South, y, x) if y < grid.height-1 => Some((y+1, x)),
+            (Dir::West, y, x) if x > 0 => Some((y, x-1)),
+            _ => None,
+        };
+
+        if let Some((y, x)) = result {
+            obstacles.insert((y, x));
+        }
+    }
+
     let mut permutations: Vec<Grid> = vec![];
 
-    for y in 0..grid.height {
-        for x in 0..grid.width {
-            // Don't put a obstruction on the guard
-            if guard.1 == y && guard.2 ==x {
-                continue
-            }
+    for (y, x) in obstacles.iter() {
+        if guard.1 == *y && guard.2 == *x {
+            continue
+        }
 
-            match grid.cells[y][x] {
-                Cell::Obstacle => { continue },
-                _ => {
-                    let mut other = grid.clone();
-                    other.cells[y][x] = Cell::Obstacle;
-                    permutations.push(other)
-                }
+        match grid.cells[*y][*x] {
+            Cell::Obstacle => { continue },
+            _ => {
+                let mut other = grid.clone();
+                other.cells[*y][*x] = Cell::Obstacle;
+                permutations.push(other)
             }
         }
     }
 
-    println!("Checking for loops in {} permutations", permutations.len());
-    for grid in permutations {
-        if find_loop(guard, grid.clone(), false) {
-            result += 1;
-        }
-        print!(".");
-        let _ = stdout().flush();
-    }
-    println!();
+    let now = Instant::now();
+
+    // How is this literally the best way to do pmap?
+    let result: u32 = permutations.par_iter()
+        .map(|grid| {
+            if find_loop(guard, grid.clone()) { 1 } else { 0 }
+        })
+        .sum();
+
+    println!("Elapsed time: {}", now.elapsed().as_millis());
 
     println!("Part 2: {}", result);
 
